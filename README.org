@@ -1,0 +1,4 @@
+* Implementation of Linux Containers in C.
+
+Inspired by build-your-own-X
+and https://blog.lizzie.io/linux-containers-in-500-loc.html
