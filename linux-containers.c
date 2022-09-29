@@ -5,7 +5,7 @@
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
+n * the Free Software Foundation; either version 2 of the License, or
  * (at your option) any later version.
  * 
  * This program is distributed in the hope that it will be useful,
@@ -68,12 +68,70 @@ struct child_config {
 
 <<syscalls>>
 
-<<child>>
+//<<child>>
+#define USERNS_OFFSET 10000
+#define USERNS_COUNT 2000
+
+int handle_child_uid_map (pid_t child_pid, int fd)
+{
+   int uid_map = 0;
+   int has_userns = -1;
+   if (read(fd, &has_userns, sizeof(has_userns)) != sizeof(has_userns)) {
+      fprintf(stderr, "couldnt't read from child!\n");
+      return -1;
+   }
+   if (has_userns) {
+      char path[PATH_MAX] = {0};
+      for (char **file = (char *[]) { "uid_map", "gid_map", 0}; *file; file++) {
+         if (snprintf(path, sizeof(path), "/proc/%d/%s", child_pid, *file)
+             > sizeof(path)) {
+               fprintf(stderr, "snprintf too big? %m\n");
+               return -1;
+             }
+             fprintf(stderr, "writing %s...", path);
+             if ((uid_map = open(path, 0_WRONLY)) == -1) {
+               fprintf(stderr, "open failed: %m\n");
+               return -1;
+             }
+             if (dprintf(uid map, "0 %d %d\n", USERNS_OFFSET, USERNS_COUNT) == -1) {
+               fprintf(stderr, "dprintf failed: %m\n");
+               close(uid_map);
+               return -1;
+             }
+             close(uid_map);
+      }
+      if (write(fd, & (int) {0}, sizeof(int)) != sizeof(int)) {
+         fprintf(stderr, "couldn't write: %m\n");
+         return -1;
+      }
+      return 0;
+   }
+}
+
+
 
 //<<choose-hostname>>
 int choose_hostname(char *buff, size_t len)
 {
-   static const char *suits[] = {"swords"}
+   static const char *suits[] = {"swords", "wands", "pentacles", "cups" };
+   static const char *minor[] = {
+      "ace", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "page", "knight", "queen", "king"
+   };
+   static const char *major[] = {
+      "fool", "magician", "high-priestess", "empress", "emperor", "hierophant", "lovers", "chariot", "strength", "hermit", "wheel", "justice", "hanged-man", "death", "temperance", "devil", "tower", "star", "moon", "sun", "judgment", "world"
+   };
+   struct timespec now = {0};
+   clock_gettime(CLOCK_MONOTONIC, &now);
+   size_t ix = now.tv_nsec % 78;
+   if (ix < sizeof(major) / sizeof(*major)) {
+      snprintf(buff, len, "%05lx-%s", now.tv_sec, major[ix]);
+   } else {
+      ix -= sizeof(major) / sizeof(*major);
+      snprint(buff, len, "%05lxcc-%s-of-%s", now.tv_sec,
+               minor[ix % (sizeof(minor) / sizeof(*minor))],
+               suits[ix / (sizeof(minor) / sizeof(*minor))]);
+   }
+   return 0;   
 }
 
 int main (int argc, char **argv)
@@ -141,7 +199,41 @@ int main (int argc, char **argv)
          goto error;
       config.hostname = hostname;
 
-   <<namespaces>>
+   //<<namespaces>>
+   if (socketpair(AF_LOCAL, SOCK_SEQPACKET, 0, sockets)) {
+      fprintf(stderr, "socketpair failed: %m\n");
+      goto error;
+   }
+   if (fcntl(sockets[0], F_SETFD, FD_CLOEXEC)) {
+      fprintf(stderr, "fcntl failed: %m\n");
+      goto error;
+   }
+   config.fd = sockets[1];
+
+   #define STACK_SIZE (1024 *1024)
+   char *stack = 0;
+   if (!(stack = malloc(STACK_SIZE))) {
+      fprintf(stderr, "=> malloc failed, out of memory?\n");
+      goto error;
+   }
+   if (resources(&config)) {
+      err = 1;
+      goto clear_resources;
+   }
+   int flags = CLONE_NEWNS
+            | CLONE_NEWCGROUP
+            | CLONE_NEWPID
+            | CLONE_NEWIPC
+            | CLONE_NEWNET
+            | CLONE_NEWNUTS;
+   if ((child_pid = clone(child, stack + STACK_SIZE, flags | SIGCHLD, &config)) == -1) {
+      fprintf(stderr, "=> clone failed! %m\n");
+      err = 1;
+      goto clear_resources;
+   }
+   close(sockets[1]);
+   sockets[1] = 0;
+
       goto cleanup;
    usage:
       fprintf(stderr, "Usage: %s -u -1 -m . -c /bin/sh ~\n", argc[0]);
@@ -152,6 +244,3 @@ int main (int argc, char **argv)
       if (sockets[1] close(sockets[1]);
       return err;
 }
-
-
-
